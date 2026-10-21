@@ -15,6 +15,12 @@
 
 Predict the trajectory of Amazon customer purchases by tracking Amazon reviews across a subset of users.
 
+Uses `user_id`, `category_id` to train a model to detect broad sequential categorical predictions of Amazon purchases.
+
+Model-assisted labelling for finer object identification by extracting metadata from `product_id` (stretch).
+
+Describe a temporal relationship of events using `timestamp` by transitioning to a time-series model (stretch).
+
 
 ## Getting Started
 
@@ -38,29 +44,25 @@ SETUP DESCRIPTION HERE
 ## Roadmap
 
 🤔 Preparations
-
 - [x] Sample dataset to explore useful labels
 - [ ] Clean and compact dataset
     - [ ] Provide easy data imports with clone parity
 
 💪 Training
-
 - [ ] Train working (broad) predictor
     - [ ] Evaluate quality and test on larger random dataset
 
 ✨ UI
-
 - [ ] GUI for graphical user interactions
     - [ ] Search bar for labels
     - [ ] Multi-label dynamic prediction
 
-🤓 Extras
-
-- [ ] (Stretch) Add finer labels with assistance of second model
-    - Instead of "Electronics" -> "Keyboard"
-    - Instead of "All_Beauty" -> "Shampoo"
-- [ ] (Stretch) Time series analysis with RBF kernel
-    - Transition from naive-sequential to time-weighted predictions
+🤓 Stretch Goals
+- [ ] Add finer labels with assistance of second model
+    - *Instead of "Electronics" -> "Keyboard"*
+    - *Instead of "All_Beauty" -> "Shampoo"*
+- [ ] Time series analysis with RBF kernel
+    - *Transition from naive-sequential to time-weighted predictions*
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
