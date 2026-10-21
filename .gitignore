@@ -1,0 +1,14 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# uv
+uv.lock
