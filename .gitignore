@@ -1,10 +1,10 @@
-# OS
+# os
 .DS_Store
 
-# Python
+# python
 __pycache__/
 
-# Environments
+# environments
 .env
 .venv
 env/
@@ -12,3 +12,6 @@ venv/
 
 # uv
 uv.lock
+
+# project
+data/
