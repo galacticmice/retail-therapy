@@ -20,6 +20,7 @@ if histories:
     print("User:", user_id)
     print("Events", len(history))
 
+    print("DATE\t  TIME\t\tPRODUCT_ID")
     for event in history:
         event_time = datetime.fromtimestamp(event["timestamp"] / 1000, tz=UTC)
         print(
