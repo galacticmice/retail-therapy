@@ -11,11 +11,11 @@
   </p>
 </div>
 
-## About The Project
+## About
 
 Predict the trajectory of Amazon customer purchases by tracking Amazon reviews across a subset of users.
 
-Uses `user_id`, `category_id` to train a model to detect broad sequential categorical predictions of Amazon purchases.
+Train a regression model with `user_id`, `category_id` to detect broad sequential categorical predictions of Amazon purchases.
 
 Model-assisted labelling for finer object identification by extracting metadata from `product_id` (stretch).
 
