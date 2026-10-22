@@ -21,23 +21,38 @@ Model-assisted labelling for finer object identification by extracting metadata 
 
 Describe a temporal relationship of events using `timestamp` by transitioning to a time-series model (stretch).
 
+<br />
 
 ## Getting Started
 
 You will need ~5 GB of space to store a subset of the dataset locally.
 
-<!--
-### Setup
-* load dataset
-  ```sh
-  python3 placeholder.py
-  ```
+<br />
 
+### Setup
+This is not a full featured dataset yet.
+Existing code is used to explore labels only.
+Will be removed later.
+
+* download subset of data
+  ```sh
+  python3 dataset.py
+  ```
+* sample n amounts of users
+  ```sh
+  python3 sample_users.py
+  ```
+* inspect the data we retrieved from the users
+  ```sh
+  python3 inspect_sample.py
+  ```
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!--
 ### Usage
 
 SETUP DESCRIPTION HERE
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 -->
 
