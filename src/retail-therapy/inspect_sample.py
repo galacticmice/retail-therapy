@@ -30,3 +30,10 @@ if histories:
 
 else:
     print("Sample empty")
+
+print("Total users: ", len(histories))
+print("Total events: ", sum(len(h) for h in histories.values()))
+print(
+    "users with 2+ events: ",
+    sum(len(h) >= 2 for h in histories.values()),
+)

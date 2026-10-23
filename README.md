@@ -61,6 +61,7 @@ SETUP DESCRIPTION HERE
 🤔 Preparations
 - [x] Sample dataset to explore useful labels
 - [ ] Clean and compact dataset
+    - [ ] Prune all `user_id` that only appears <3 counts
     - [ ] Provide easy data imports with clone parity
 
 💪 Training
