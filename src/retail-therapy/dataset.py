@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import os
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -11,7 +12,7 @@ from tqdm import tqdm
 CATEGORIES_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/all_categories.txt"
 BASE_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/benchmark/0core/rating_only"
 
-PREPFOLDER_PATH = "../../data/prep"
+PREPFOLDER_PATH = (Path(__file__).resolve().parent / "../../data/prep").resolve()
 
 
 def get_category_list():
@@ -26,9 +27,7 @@ def get_category_list():
 
 
 def count_category(category_dict):
-    """each CPU process parses a category and counts the number of times a user_id appears.
-    then saves it in a (category name).csv.gz file.
-    a completed file means the count was done, partial means it was incomplete."""
+    """worker function for processes to run to count users in categories"""
 
     category, url = category_dict
     destination = Path(f"{PREPFOLDER_PATH}/counts") / f"{category}.csv.gz"
@@ -70,12 +69,14 @@ def count_category(category_dict):
 
 
 def launch_category_counter():
+    """each CPU process parses a category and counts the number of times a user_id appears.
+    then saves it in a (category name).csv.gz file.
+    a completed file means the count was done, partial means it was incomplete."""
+
     category_urls = get_category_list()
 
     # create temporary folder for counting user events
-    Path("../../data").mkdir(exist_ok=True)
-    Path("../../data/prep").mkdir(exist_ok=True)
-    Path(f"{PREPFOLDER_PATH}/counts").mkdir(exist_ok=True)
+    Path(f"{PREPFOLDER_PATH}/counts").mkdir(parents=True, exist_ok=True)
 
     # prep process pool for parallel counter
 
@@ -89,7 +90,8 @@ def launch_category_counter():
         for task in tqdm(
             as_completed(active_tasks),
             total=len(active_tasks),
-            desc="Progress",
+            desc="Counting Users",
+            unit=" categories",
         ):
             filename = task.result()
             tqdm.write(f"Finished: {filename}")
@@ -107,7 +109,7 @@ def launch_merge_counters():
 
     try:
         print()
-        desired_events = int(input("Minimum events to qualify(default=5)? "))
+        desired_events = int(input("Minimum events to qualify(Enter=default 5)? "))
         if desired_events < 1:
             desired_events = 5
     except ValueError:
@@ -134,12 +136,11 @@ def launch_merge_counters():
     counts = {}
 
     # adds up all counters in all files
-    for filename in tqdm(files, desc="Merge Progress"):
+    for filename in tqdm(files, desc="Merge Progress", unit=" files"):
         with gzip.open(filename, "rt", encoding="utf-8", newline="") as file:
             for row in csv.DictReader(file):
                 user_id = row["user_id"]
                 num_events = int(row["events"])
-
                 counts[user_id] = counts.get(user_id, 0) + num_events
 
     # creates new file and writes the finalized count
@@ -165,6 +166,65 @@ def launch_merge_counters():
     input("\033[3mPress Enter to continue...\033[0m")
 
 
+def launch_select_cohort():
+    """selects a % of the eligible users to track for training.
+    default is 15% -- reduces file size."""
+
+    selected_users = 0
+    selected_events = 0
+
+    try:
+        sample_percent = int(input("% of users to sample from(Enter=default 15%): "))
+        if sample_percent < 1:
+            sample_percent = 15
+    except ValueError:
+        sample_percent = 15
+
+    temporary = Path(f"{PREPFOLDER_PATH}/cohort_users.csv.gz.partial")
+    destination = Path(f"{PREPFOLDER_PATH}/cohort_users.csv.gz")
+
+    with (
+        gzip.open(
+            f"{PREPFOLDER_PATH}/eligible_users.csv.gz", "rt", encoding="utf-8"
+        ) as source,
+        gzip.open(temporary, "wt", encoding="utf-8", newline="") as output,
+    ):
+        rows = tqdm(
+            csv.DictReader(source),
+            desc="Selection Progress",
+            unit=" users",
+        )
+        selected = (
+            row
+            for row in rows
+            if int(
+                hashlib.sha256(row["user_id"].encode()).hexdigest(),
+                16,
+            )
+            % 100
+            < sample_percent
+        )
+
+        writer = csv.writer(output)
+        writer.writerow(["user_id", "events"])
+
+        for row in selected:
+            writer.writerow([row["user_id"], row["events"]])
+            selected_users += 1
+            selected_events += int(row["events"])
+
+    if selected_users < 100_000:
+        print("Cohort has fewer than 100,000 users. Try increasing sample %")
+
+    temporary.replace(destination)
+
+    print()
+    print("File created: ../../data/prep/cohort_users.csv.gz")
+    print("Selected users: ", selected_users)
+    print("Their total events: ", selected_events)
+    input("\033[3mPress Enter to continue...\033[0m")
+
+
 def launch_cleanup():
     # """deletes all previous prep files other than the lastest one."""
 
@@ -184,7 +244,7 @@ def launch_cleanup():
 
 
 def launch_reset():
-    confirm = input("WARNING: RESTARTS ALL DATA PREPARATION!\n\nARE YOU SURE? [y/N] ")
+    confirm = input("WARNING: RESTARTS ALL DATA PREPARATION!\n\nARE YOU SURE? [Y/n] ")
 
     if confirm.lower() != "y":
         return
@@ -224,8 +284,8 @@ if __name__ == "__main__":
         print("""
         [1] Start user_id counter (~20 mins, ~5GB space)
         [2] Merge and scan eligible users (~6 mins, ~700MB)
+        [3] Hash-select 15% of users to decrease space
 
-        [9] Cleanup unused data files
         [0] Erase and reset all preparation files
 
         [x] Exit
@@ -240,6 +300,9 @@ if __name__ == "__main__":
 
             case "2":
                 launch_merge_counters()
+
+            case "3":
+                launch_select_cohort()
 
             case "x":
                 os.system("cls" if os.name == "nt" else "clear")
