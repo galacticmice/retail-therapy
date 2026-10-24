@@ -62,7 +62,8 @@ SETUP DESCRIPTION HERE
 - [x] Sample dataset to explore useful labels
 - [ ] Clean and compact dataset
     - [ ] Prune all `user_id` that only appears <3 counts
-    - [ ] Provide easy data imports with clone parity
+    - [ ] Parallel import and cleaning while ensuring copy parity
+        - *using `ParallelPoolExecutor` and `multiprocessing.shared_memory`*
 
 💪 Training
 - [ ] Train working (broad) predictor
