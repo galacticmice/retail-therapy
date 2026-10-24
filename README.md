@@ -34,17 +34,9 @@ This is not a full featured dataset yet.
 Existing code is used to explore labels only.
 Will be removed later.
 
-* download subset of data
+* data preparation
   ```sh
   python3 dataset.py
-  ```
-* sample n amounts of users
-  ```sh
-  python3 sample_users.py
-  ```
-* inspect the data we retrieved from the users
-  ```sh
-  python3 inspect_sample.py
   ```
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
