@@ -35,7 +35,7 @@ def count_category(category_dict):
 
     # if file exists means it was already scanned once
     if destination.exists():
-        return str(f"{category} \t\t Already completed prior.")
+        return str(f"{category:<35} Already completed prior.")
 
     # open category and count number of time user appears
     with requests.get(url, stream=True, timeout=60) as response:
