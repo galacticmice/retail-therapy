@@ -35,9 +35,10 @@ Existing code is used to explore labels only.
 Will be removed later.
 
 * data preparation
-  ```sh
-  python3 dataset.py
-  ```
+```sh
+python3 dataset.py
+```
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!--
@@ -54,6 +55,7 @@ SETUP DESCRIPTION HERE
 - [x] Sample dataset to explore useful labels
 - [ ] Clean and compact dataset
     - [x] Prune all `user_id` that only appears <3 counts
+    -  <img width="170" height="35" alt="Pasted Graphic" src="https://github.com/user-attachments/assets/2f31626d-5e07-4df8-b98a-57dff353f4f3" />
     - [ ] Parallel import and cleaning while ensuring copy parity
         - *using `ParallelPoolExecutor`*
 
