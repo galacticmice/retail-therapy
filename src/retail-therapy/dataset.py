@@ -105,11 +105,19 @@ def launch_merge_counters():
     destination = Path(f"{PREPFOLDER_PATH}/eligible_users.csv.gz")
     temporary = Path(f"{PREPFOLDER_PATH}/eligible_users.csv.gz.partial")
 
-    if destination.exists():
+    try:
         print()
-        print("Already counted users before - you can proceed to the next step!")
-        input("\033[3mPress Enter to continue...\033[0m")
-        return
+        desired_events = int(input("Minimum events to qualify(default=5)? "))
+        if desired_events < 1:
+            desired_events = 5
+    except ValueError:
+        desired_events = 5
+
+    # if destination.exists():
+    #     print()
+    #     print("Already counted users before - you can proceed to the next step!")
+    #     input("\033[3mPress Enter to continue...\033[0m")
+    #     return
 
     files = sorted(Path(f"{PREPFOLDER_PATH}/counts").glob("*.csv.gz"))
     if len(files) != 34:
@@ -120,6 +128,7 @@ def launch_merge_counters():
         input("\033[3mPress Enter to continue...\033[0m")
         return
 
+    print()
     print("It will be stuck at 100% for a few minutes--that is normal!")
 
     counts = {}
@@ -140,34 +149,38 @@ def launch_merge_counters():
         writer.writerows(
             (user_id, num_events)
             for user_id, num_events in counts.items()
-            if num_events >= 3
+            if num_events >= desired_events
         )
 
     temporary.replace(destination)
 
     print()
     print("Total users: ", len(counts))
-    print("Eligible users: ", sum(n >= 3 for n in counts.values()))
+    print(
+        f"Eligible users(>={desired_events} events): ",
+        sum(n >= desired_events for n in counts.values()),
+    )
 
     print()
     input("\033[3mPress Enter to continue...\033[0m")
 
 
 def launch_cleanup():
-    """deletes all previous prep files other than the lastest one."""
-    eligible_users = "eligible_users.csv.gz"
+    # """deletes all previous prep files other than the lastest one."""
 
-    if (Path(f"{PREPFOLDER_PATH}/counts") / eligible_users).exists():
-        for file in Path(f"{PREPFOLDER_PATH}/counts").iterdir():
-            if file.is_file() and file.name != eligible_users:
-                file.unlink()
+    # eligible_users = "eligible_users.csv.gz"
+
+    # if (Path(f"{PREPFOLDER_PATH}/counts") / eligible_users).exists():
+    #     for file in Path(f"{PREPFOLDER_PATH}/counts").iterdir():
+    #         if file.is_file() and file.name != eligible_users:
+    #             file.unlink()
 
     for file in Path(f"{PREPFOLDER_PATH}/counts").glob("*.partial"):
         if file.is_file():
             file.unlink()
 
-    print()
-    input("\033[3mPress Enter to continue...\033[0m")
+    # print()
+    # input("\033[3mPress Enter to continue...\033[0m")
 
 
 def launch_reset():
@@ -213,10 +226,12 @@ if __name__ == "__main__":
         [2] Merge and scan eligible users (~6 mins, ~700MB)
 
         [9] Cleanup unused data files
-        [0] Erase and reset all data files
+        [0] Erase and reset all preparation files
 
         [x] Exit
             """)
+
+        launch_cleanup()
         cin = input("\t>> ").lower()
 
         match cin:
@@ -230,9 +245,9 @@ if __name__ == "__main__":
                 os.system("cls" if os.name == "nt" else "clear")
                 break
 
-            case "9":
-                print("Cleaning up...")
-                launch_cleanup()
+            # case "9":
+            #     print("Cleaning up...")
+            #     launch_cleanup()
 
             case "0":
                 launch_reset()
