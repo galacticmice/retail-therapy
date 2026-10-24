@@ -61,9 +61,9 @@ SETUP DESCRIPTION HERE
 🤔 Preparations
 - [x] Sample dataset to explore useful labels
 - [ ] Clean and compact dataset
-    - [ ] Prune all `user_id` that only appears <3 counts
+    - [x] Prune all `user_id` that only appears <3 counts
     - [ ] Parallel import and cleaning while ensuring copy parity
-        - *using `ParallelPoolExecutor` and `multiprocessing.shared_memory`*
+        - *using `ParallelPoolExecutor`*
 
 💪 Training
 - [ ] Train working (broad) predictor
