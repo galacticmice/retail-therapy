@@ -2,7 +2,7 @@ import csv
 import gzip
 import os
 import shutil
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -78,15 +78,20 @@ def launch_category_counter():
     Path(f"{PREPFOLDER_PATH}/counts").mkdir(exist_ok=True)
 
     # prep process pool for parallel counter
-    with ProcessPoolExecutor(max_workers=4) as pool:
-        results = pool.map(count_category, category_urls.items())
 
-        # printing progress
-        for filename in tqdm(
-            results,
-            total=len(category_urls),
+    with ProcessPoolExecutor(
+        max_workers=max(4, (os.process_cpu_count() or 1) - 2)
+    ) as pool:
+        active_tasks = [
+            pool.submit(count_category, item) for item in category_urls.items()
+        ]
+
+        for task in tqdm(
+            as_completed(active_tasks),
+            total=len(active_tasks),
             desc="Progress",
         ):
+            filename = task.result()
             tqdm.write(f"Finished: {filename}")
 
     print()
@@ -166,15 +171,15 @@ def launch_cleanup():
 
 
 def launch_reset():
-    confirm = input("WARNING: RESTARTS ALL DATA PREPARATION!\nARE YOU SURE? [y/N] ")
+    confirm = input("WARNING: RESTARTS ALL DATA PREPARATION!\n\nARE YOU SURE? [y/N] ")
 
     if confirm.lower() != "y":
         return
 
     shutil.rmtree(PREPFOLDER_PATH)
 
-    print(f"✓ Deleted: {PREPFOLDER_PATH}")
     print()
+    print(f"✓ Deleted: {PREPFOLDER_PATH}")
     input("\033[3mPress Enter to continue...\033[0m")
 
 
@@ -230,7 +235,6 @@ if __name__ == "__main__":
                 launch_cleanup()
 
             case "0":
-                print("Deleting files...")
                 launch_reset()
 
             case _:
