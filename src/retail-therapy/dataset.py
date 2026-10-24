@@ -35,7 +35,7 @@ def count_category(category_dict):
 
     # if file exists means it was already scanned once
     if destination.exists():
-        return str(f"{category} already completed prior.")
+        return str(f"{category} \t\t Already completed prior.")
 
     # open category and count number of time user appears
     with requests.get(url, stream=True, timeout=60) as response:
@@ -91,23 +91,31 @@ def launch_category_counter():
 
     print()
     print("Checkpoint: all categories collected. You may merge users now.")
-    input("Press Enter to continue...")
+    input("\033[3mPress Enter to continue...\033[0m")
 
 
 def launch_merge_counters():
     """takes all counters for all categories and tallies them up."""
 
-    destination = Path("eligible_users.csv.gz")
-    temporary = Path("eligible_users.csv.gz.partial")
+    destination = Path(f"{PREPFOLDER_PATH}/eligible_users.csv.gz")
+    temporary = Path(f"{PREPFOLDER_PATH}/eligible_users.csv.gz.partial")
 
-    if Path(f"{PREPFOLDER_PATH}/counts" / destination).exists():
-        print("Already counted users before - either reset or proceed to next step!")
-        input("Press Enter to continue...")
+    if destination.exists():
+        print()
+        print("Already counted users before - you can proceed to the next step!")
+        input("\033[3mPress Enter to continue...\033[0m")
         return
 
     files = sorted(Path(f"{PREPFOLDER_PATH}/counts").glob("*.csv.gz"))
     if len(files) != 34:
-        raise ValueError(f"Expected 34 categories, but only found {len(files)} files")
+        print()
+        print(f"Expected 34 categories, but only found {len(files)} files.")
+        print("Program must have been interrupted--run the counter again.")
+
+        input("\033[3mPress Enter to continue...\033[0m")
+        return
+
+    print("It will be stuck at 100% for a few minutes--that is normal!")
 
     counts = {}
 
@@ -132,11 +140,12 @@ def launch_merge_counters():
 
     temporary.replace(destination)
 
+    print()
     print("Total users: ", len(counts))
     print("Eligible users: ", sum(n >= 3 for n in counts.values()))
 
     print()
-    input("Press Enter to continue...")
+    input("\033[3mPress Enter to continue...\033[0m")
 
 
 def launch_cleanup():
@@ -153,7 +162,7 @@ def launch_cleanup():
             file.unlink()
 
     print()
-    input("Press Enter to continue...")
+    input("\033[3mPress Enter to continue...\033[0m")
 
 
 def launch_reset():
@@ -166,7 +175,7 @@ def launch_reset():
 
     print(f"✓ Deleted: {PREPFOLDER_PATH}")
     print()
-    input("Press Enter to continue...")
+    input("\033[3mPress Enter to continue...\033[0m")
 
 
 if __name__ == "__main__":
@@ -195,15 +204,15 @@ if __name__ == "__main__":
     while True:
         os.system("cls" if os.name == "nt" else "clear")
         print("""
-    [1] Start user_id counter (~20 minutes, ~5gb space)
-    [2] Merge and scan eligible users (~??, ??)
+        [1] Start user_id counter (~20 mins, ~5GB space)
+        [2] Merge and scan eligible users (~6 mins, ~700MB)
 
-    [9] Cleanup unused data files
-    [0] Erase and reset all data files
+        [9] Cleanup unused data files
+        [0] Erase and reset all data files
 
-    [x] Exit
+        [x] Exit
             """)
-        cin = input(">> ").lower()
+        cin = input("\t>> ").lower()
 
         match cin:
             case "1":
