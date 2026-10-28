@@ -284,7 +284,7 @@ def parquet_category(item):
                 writer.write_table(table)
 
     temporary.replace(destination)
-    return str(destination)
+    return str(category)
 
 
 def launch_cleanup():
@@ -350,7 +350,7 @@ if __name__ == "__main__":
         [1] Start user_id counter (~20 mins, ~5gb)
         [2] Merge and scan eligible users (~6 mins, ~700mb)
         [3] Hash-select 15% of users to decrease space
-        [4] Import cohort as dataset (~20gb)
+        [4] Import cohort as dataset (~2gb)
 
         [0] Erase and reset all preparation files
 
