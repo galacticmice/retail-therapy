@@ -286,7 +286,10 @@ def parquet_category(item):
     batch = []
 
     with requests.get(url, stream=True, timeout=120) as response:
+        response.raise_for_status()
         response.raw.decode_content = True
+        response.raw.auto_close = False
+
         source = TextIOWrapper(response.raw, encoding="utf-8-sig", newline="")
         rows = csv.DictReader(source)
 
@@ -314,6 +317,7 @@ def parquet_category(item):
                 writer.write_table(table)
 
     temporary.replace(destination)
+    return str(destination)
 
 
 def launch_cleanup():
@@ -376,10 +380,10 @@ if __name__ == "__main__":
     while True:
         os.system("cls" if os.name == "nt" else "clear")
         print("""
-        [1] Start user_id counter (~20 mins, ~5GB)
-        [2] Merge and scan eligible users (~6 mins, ~700MB)
+        [1] Start user_id counter (~20 mins, ~5gb)
+        [2] Merge and scan eligible users (~6 mins, ~700mb)
         [3] Hash-select 15% of users to decrease space
-        [4] Import cohort as dataset (~20GB)
+        [4] Import cohort as dataset (~20gb)
 
         [0] Erase and reset all preparation files
 
@@ -405,7 +409,7 @@ if __name__ == "__main__":
 
             case "4":
                 launch_parallel_func(
-                    Path(f"{RAWFOLDER_PATH}/events"),
+                    RAWFOLDER_PATH,
                     parquet_category,
                     "Checkpoint: raw data imported. You may merge users now.",
                     init_cohort,
