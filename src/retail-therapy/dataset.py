@@ -311,8 +311,8 @@ def launch_parquet_combine():
 
     expected_rows = sum(pq.ParquetFile(file).metadata.num_rows for file in files)
 
+    PROCESSEDFOLDER_PATH.mkdir(parents=True, exist_ok=True)
     destination = PROCESSEDFOLDER_PATH / "events_dataset.parquet"
-    destination.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".parquet.partial")
     (
         pl.scan_parquet(files)
@@ -415,6 +415,7 @@ if __name__ == "__main__":
         [4] Import raw cohort data (~30 mins, ~2gb)
         [5] Merge cohort data
 
+        [9] Cleanup all incomplete files (safe)
         [0] Erase and reset all preparation files
 
         [x] Exit
@@ -456,6 +457,7 @@ if __name__ == "__main__":
 
             case "5":
                 launch_parquet_combine()
+                print("Combining...")
 
             case "8":
                 check()
@@ -464,9 +466,11 @@ if __name__ == "__main__":
                 os.system("cls" if os.name == "nt" else "clear")
                 break
 
-            # case "9":
-            #     print("Cleaning up...")
-            #     launch_cleanup()
+            case "9":
+                print("Cleaning up...")
+                map(launch_cleanup, filepaths)
+                print("Cleaned.")
+                input("\033[3mPress Enter to continue...\033[0m")
 
             case "0":
                 launch_reset()

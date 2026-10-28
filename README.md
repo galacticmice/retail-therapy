@@ -53,11 +53,11 @@ SETUP DESCRIPTION HERE
 
 🤔 Preparations
 - [x] Sample dataset to explore useful labels
-- [ ] Clean and compact dataset
-    - [x] Prune all `user_id` that only appears <3 counts
+- [x] Clean and compact dataset
+    - [x] Prune all `user_id` that only appears <n counts(default=5)
     -  <img width="170" height="35" alt="Pasted Graphic" src="https://github.com/user-attachments/assets/2f31626d-5e07-4df8-b98a-57dff353f4f3" />
-    - [ ] Parallel import and cleaning while ensuring copy parity
-        - *using `ParallelPoolExecutor`*
+    - [x] Parallel import and cleaning while ensuring copy parity
+        - *using `ParallelPoolExecutor`* and `polars` for large dataset
 
 💪 Training
 - [ ] Train working (broad) predictor
