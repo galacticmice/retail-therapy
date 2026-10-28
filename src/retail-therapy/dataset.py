@@ -26,7 +26,7 @@ cohort_ids: set[str]  # suppress lsp warning
 
 
 def get_category_list():
-    # get list of all categories + unknown
+    """get list of all categories + unknown"""
     response = requests.get(CATEGORIES_URL, timeout=30)
     response.raise_for_status()
     categories = response.text.split()
@@ -79,14 +79,13 @@ def count_category(category_dict):
 
 
 def launch_parallel_func(directory, func, text, init=None):
+    """shared fn for parallel crawling of dataset"""
 
     category_urls = get_category_list()
 
-    # create temporary folder for counting user events
     directory.mkdir(parents=True, exist_ok=True)
 
-    # prep process pool for parallel counter
-
+    # prep process pool for parallel workers
     with ProcessPoolExecutor(max_workers=4, initializer=init) as pool:
         active_tasks = [pool.submit(func, item) for item in category_urls.items()]
 
