@@ -7,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from io import TextIOWrapper
 from pathlib import Path
 
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
@@ -17,6 +18,11 @@ BASE_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/reso
 
 PREPFOLDER_PATH = (Path(__file__).resolve().parent / "../../data/prep").resolve()
 RAWFOLDER_PATH = (Path(__file__).resolve().parent / "../../data/raw").resolve()
+PROCESSEDFOLDER_PATH = (
+    Path(__file__).resolve().parent / "../../data/processed"
+).resolve()
+
+cohort_ids: set[str]  # suppress lsp warning
 
 
 def get_category_list():
@@ -119,6 +125,7 @@ def launch_merge_counters():
 
     files = sorted(Path(f"{PREPFOLDER_PATH}/counts").glob("*.csv.gz"))
     if len(files) != 34:
+        launch_cleanup(PREPFOLDER_PATH / "counts")
         print()
         print(f"Expected 34 categories, but only found {len(files)} files.")
         print("Program must have been interrupted--run the counter again.")
@@ -222,6 +229,8 @@ def launch_select_cohort():
 
 
 def init_cohort():
+    """loads cohort as a parallel worker initializer for efficiency"""
+
     global cohort_ids
     with gzip.open(
         Path(f"{PREPFOLDER_PATH}/cohort_users.csv.gz"), "rt", encoding="utf-8"
@@ -230,6 +239,8 @@ def init_cohort():
 
 
 def parquet_category(item):
+    """download raw data file, sampling only from selected cohort"""
+
     category, url = item
 
     # the labels we need
@@ -287,7 +298,47 @@ def parquet_category(item):
     return str(category)
 
 
-def launch_cleanup():
+def launch_parquet_combine():
+    """combines raw categorical parquet files into one cleaned dataset"""
+
+    files = sorted(RAWFOLDER_PATH.glob("*.parquet"))
+
+    if len(files) != 34:
+        launch_cleanup(RAWFOLDER_PATH)
+        print(f"Expected 34 files, but only found {len(files)}!")
+        input("\033[3mPress Enter to abort...\033[0m")
+        return
+
+    expected_rows = sum(pq.ParquetFile(file).metadata.num_rows for file in files)
+
+    destination = PROCESSEDFOLDER_PATH / "events_dataset.parquet"
+    destination.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(".parquet.partial")
+    (
+        pl.scan_parquet(files)
+        .sort(["user_id", "timestamp"])
+        .sink_parquet(
+            temporary, compression="zstd", engine="streaming", maintain_order=True
+        )
+    )
+
+    actual_rows = pq.ParquetFile(temporary).metadata.num_rows
+
+    if actual_rows != expected_rows:
+        launch_cleanup(RAWFOLDER_PATH)
+        print(
+            "Inconsistent data detected, actual row count != expected row count. \nImport raw data again!"
+        )
+        print("Performing cleanup...")
+        input("\033[3mPress Enter to abort...\033[0m")
+
+    temporary.replace(destination)
+    print()
+    print(f"Merge completed: logged {actual_rows:,} events.")
+    input("\033[3mPress Enter to continue...\033[0m")
+
+
+def launch_cleanup(dir):
     # """deletes all previous prep files other than the lastest one."""
 
     # eligible_users = "eligible_users.csv.gz"
@@ -297,7 +348,7 @@ def launch_cleanup():
     #         if file.is_file() and file.name != eligible_users:
     #             file.unlink()
 
-    for file in Path(f"{PREPFOLDER_PATH}/counts").glob("*.partial"):
+    for file in dir.glob("*.partial"):
         if file.is_file():
             file.unlink()
 
@@ -361,14 +412,24 @@ if __name__ == "__main__":
         [1] Start user_id counter (~20 mins, ~5gb)
         [2] Merge and scan eligible users (~6 mins, ~700mb)
         [3] Hash-select 15% of users to decrease space
-        [4] Import cohort as dataset (~2gb)
+        [4] Import raw cohort data (~30 mins, ~2gb)
+        [5] Merge cohort data
 
         [0] Erase and reset all preparation files
 
         [x] Exit
             """)
 
-        launch_cleanup()
+        filepaths = [
+            PREPFOLDER_PATH,
+            PREPFOLDER_PATH / "counts",
+            RAWFOLDER_PATH,
+            PROCESSEDFOLDER_PATH,
+        ]
+
+        # cleanup
+        map(launch_cleanup, filepaths)
+
         cin = input("\t>> ").lower()
 
         match cin:
@@ -394,6 +455,9 @@ if __name__ == "__main__":
                 )
 
             case "5":
+                launch_parquet_combine()
+
+            case "8":
                 check()
 
             case "x":
