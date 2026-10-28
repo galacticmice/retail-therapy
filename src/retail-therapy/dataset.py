@@ -321,6 +321,17 @@ def launch_reset():
     input("\033[3mPress Enter to continue...\033[0m")
 
 
+def check():
+    files = sorted(RAWFOLDER_PATH.glob("*.parquet"))
+    total_events = sum(pq.ParquetFile(file).metadata.num_rows for file in files)
+
+    print(f"Categories: {len(files)} / 34")
+    print(f"Events: {total_events:,}")
+    print("Matches expected:", total_events == 75_603_822)
+
+    input("\033[3mPress Enter to continue...\033[0m")
+
+
 if __name__ == "__main__":
     # # get list of all categories + unknown
     # response = requests.get(CATEGORIES_URL, timeout=30)
@@ -381,6 +392,9 @@ if __name__ == "__main__":
                     "Checkpoint: raw data imported. You may merge users now.",
                     init_cohort,
                 )
+
+            case "5":
+                check()
 
             case "x":
                 os.system("cls" if os.name == "nt" else "clear")
