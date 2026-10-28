@@ -30,9 +30,6 @@ You will need ~15 GB of space to store a subset of the dataset locally.
 <br />
 
 ### Setup
-This is not a full featured dataset yet.
-Existing code is used to explore labels only.
-Will be removed later.
 
 * data preparation
 ```sh
