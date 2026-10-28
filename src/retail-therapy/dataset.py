@@ -4,8 +4,11 @@ import hashlib
 import os
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from io import TextIOWrapper
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import requests
 from tqdm import tqdm
 
@@ -13,6 +16,7 @@ CATEGORIES_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-202
 BASE_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/benchmark/0core/rating_only"
 
 PREPFOLDER_PATH = (Path(__file__).resolve().parent / "../../data/prep").resolve()
+RAWFOLDER_PATH = (Path(__file__).resolve().parent / "../../data/raw").resolve()
 
 
 def get_category_list():
@@ -68,7 +72,32 @@ def count_category(category_dict):
     return str(destination)
 
 
-def launch_category_counter():
+def launch_parallel_func(directory, func, text, init=None):
+
+    category_urls = get_category_list()
+
+    # create temporary folder for counting user events
+    directory.mkdir(parents=True, exist_ok=True)
+
+    # prep process pool for parallel counter
+
+    with ProcessPoolExecutor(max_workers=4, initializer=init) as pool:
+        active_tasks = [pool.submit(func, item) for item in category_urls.items()]
+
+        for task in tqdm(
+            as_completed(active_tasks),
+            total=len(active_tasks),
+            desc="Collecting",
+            unit=" categories",
+        ):
+            tqdm.write(f"Finished: {task.result()}")
+
+    print()
+    print(text)
+    input("\033[3mPress Enter to continue...\033[0m")
+
+
+def launch_category_counter_old():
     """each CPU process parses a category and counts the number of times a user_id appears.
     then saves it in a (category name).csv.gz file.
     a completed file means the count was done, partial means it was incomplete."""
@@ -225,6 +254,68 @@ def launch_select_cohort():
     input("\033[3mPress Enter to continue...\033[0m")
 
 
+def init_cohort():
+    global cohort_ids
+    with gzip.open(
+        Path(f"{PREPFOLDER_PATH}/cohort_users.csv.gz"), "rt", encoding="utf-8"
+    ) as source:
+        cohort_ids = {row["user_id"] for row in csv.DictReader(source)}
+
+
+def parquet_category(item):
+    category, url = item
+
+    # the labels we need
+    EVENT_SCHEMA = pa.schema(
+        [
+            ("user_id", pa.string()),
+            ("parent_asin", pa.string()),
+            ("category", pa.string()),
+            ("timestamp", pa.int64()),
+        ]
+    )
+
+    BATCH_SIZE = 100000
+
+    temporary = RAWFOLDER_PATH / f"{category}.parquet.partial"
+    destination = RAWFOLDER_PATH / f"{category}.parquet"
+
+    if destination.exists():
+        return str(f"{category:<35} parquest previously imported")
+
+    batch = []
+
+    with requests.get(url, stream=True, timeout=120) as response:
+        response.raw.decode_content = True
+        source = TextIOWrapper(response.raw, encoding="utf-8-sig", newline="")
+        rows = csv.DictReader(source)
+
+        with pq.ParquetWriter(temporary, EVENT_SCHEMA, compression="zstd") as writer:
+            for row in rows:
+                if row["user_id"] not in cohort_ids:
+                    continue  # skip user_ids not selected as cohort
+
+                event = {
+                    "user_id": row["user_id"],
+                    "parent_asin": row["parent_asin"],
+                    "category": category,
+                    "timestamp": int(row["timestamp"]),
+                }
+                batch.append(event)
+
+                # batch write into file
+                if len(batch) >= BATCH_SIZE:
+                    table = pa.Table.from_pylist(batch, schema=EVENT_SCHEMA)
+                    writer.write_table(table)
+                    batch.clear()
+
+            if batch:
+                table = pa.Table.from_pylist(batch, schema=EVENT_SCHEMA)
+                writer.write_table(table)
+
+    temporary.replace(destination)
+
+
 def launch_cleanup():
     # """deletes all previous prep files other than the lastest one."""
 
@@ -250,9 +341,12 @@ def launch_reset():
         return
 
     shutil.rmtree(PREPFOLDER_PATH)
+    shutil.rmtree(RAWFOLDER_PATH)
 
     print()
     print(f"✓ Deleted: {PREPFOLDER_PATH}")
+    print(f"✓ Deleted: {RAWFOLDER_PATH}")
+
     input("\033[3mPress Enter to continue...\033[0m")
 
 
@@ -282,9 +376,10 @@ if __name__ == "__main__":
     while True:
         os.system("cls" if os.name == "nt" else "clear")
         print("""
-        [1] Start user_id counter (~20 mins, ~5GB space)
+        [1] Start user_id counter (~20 mins, ~5GB)
         [2] Merge and scan eligible users (~6 mins, ~700MB)
         [3] Hash-select 15% of users to decrease space
+        [4] Import cohort as dataset (~20GB)
 
         [0] Erase and reset all preparation files
 
@@ -296,13 +391,25 @@ if __name__ == "__main__":
 
         match cin:
             case "1":
-                launch_category_counter()
+                launch_parallel_func(
+                    Path(f"{PREPFOLDER_PATH}/counts"),
+                    count_category,
+                    "Checkpoint: all categories collected. You may merge users now.",
+                )
 
             case "2":
                 launch_merge_counters()
 
             case "3":
                 launch_select_cohort()
+
+            case "4":
+                launch_parallel_func(
+                    Path(f"{RAWFOLDER_PATH}/events"),
+                    parquet_category,
+                    "Checkpoint: raw data imported. You may merge users now.",
+                    init_cohort,
+                )
 
             case "x":
                 os.system("cls" if os.name == "nt" else "clear")
