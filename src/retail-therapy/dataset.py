@@ -97,39 +97,6 @@ def launch_parallel_func(directory, func, text, init=None):
     input("\033[3mPress Enter to continue...\033[0m")
 
 
-def launch_category_counter_old():
-    """each CPU process parses a category and counts the number of times a user_id appears.
-    then saves it in a (category name).csv.gz file.
-    a completed file means the count was done, partial means it was incomplete."""
-
-    category_urls = get_category_list()
-
-    # create temporary folder for counting user events
-    Path(f"{PREPFOLDER_PATH}/counts").mkdir(parents=True, exist_ok=True)
-
-    # prep process pool for parallel counter
-
-    with ProcessPoolExecutor(
-        max_workers=max(4, (os.process_cpu_count() or 1) - 2)
-    ) as pool:
-        active_tasks = [
-            pool.submit(count_category, item) for item in category_urls.items()
-        ]
-
-        for task in tqdm(
-            as_completed(active_tasks),
-            total=len(active_tasks),
-            desc="Counting Users",
-            unit=" categories",
-        ):
-            filename = task.result()
-            tqdm.write(f"Finished: {filename}")
-
-    print()
-    print("Checkpoint: all categories collected. You may merge users now.")
-    input("\033[3mPress Enter to continue...\033[0m")
-
-
 def launch_merge_counters():
     """takes all counters for all categories and tallies them up."""
 
