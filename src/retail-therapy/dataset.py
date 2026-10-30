@@ -3,9 +3,13 @@ import gzip
 import hashlib
 import os
 import shutil
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import signal
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from contextlib import ExitStack
 from io import TextIOWrapper
+from multiprocessing import get_context
 from pathlib import Path
+from queue import Empty
 
 import polars as pl
 import pyarrow as pa
@@ -23,6 +27,43 @@ PROCESSEDFOLDER_PATH = (
 ).resolve()
 
 cohort_ids: set[str]  # suppress lsp warning
+PROGRESS_INTERVAL = 1_000_000
+_progress_queue = None
+_stop_event = None
+
+
+def init_progress(progress_queue, stop_event, initializer):
+    """Share progress events with the parent, then initialize worker data."""
+    global _progress_queue, _stop_event
+    _progress_queue = progress_queue
+    _stop_event = stop_event
+    # The parent handles Ctrl-C; workers close their resources cooperatively.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if initializer is not None:
+        initializer()
+
+
+
+class ShutdownRequested(Exception):
+    pass
+
+
+def check_shutdown():
+    if _stop_event is not None and _stop_event.is_set():
+        raise ShutdownRequested()
+
+
+def run_category(func, item):
+    try:
+        check_shutdown()
+        return func(item)
+    except ShutdownRequested:
+        return None
+
+
+def report_progress(category, rows=0, phase="reading"):
+    if _progress_queue is not None:
+        _progress_queue.put((os.getpid(), category, rows, phase))
 
 
 def get_category_list():
@@ -44,7 +85,10 @@ def count_category(category_dict):
 
     # if file exists means it was already scanned once
     if destination.exists():
-        return str(f"{category:<35} Already completed prior.")
+        return str(category)
+
+    check_shutdown()
+    report_progress(category)
 
     # open category and count number of time user appears
     with requests.get(url, stream=True, timeout=60) as response:
@@ -60,42 +104,131 @@ def count_category(category_dict):
 
         counts = {}
 
-        for row in rows:
+        rows_read = 0
+        for rows_read, row in enumerate(rows, start=1):
+            if rows_read % 10_000 == 0:
+                check_shutdown()
             user_id = row["user_id"]
             counts[user_id] = counts.get(user_id, 0) + 1
+            if rows_read % PROGRESS_INTERVAL == 0:
+                report_progress(category, rows_read)
 
     temporary = destination.with_suffix(".gz.partial")
 
-    # write to temporary file, checkpointing for interrupts
+    check_shutdown()
+    report_progress(category, rows_read, "writing")
+    # Publish only a complete count file; interrupted categories restart.
     with gzip.open(temporary, "wt", encoding="utf-8", newline="") as output:
         writer = csv.writer(output)
         writer.writerow(["user_id", "events"])
 
-        for user_id, number in counts.items():
+        for index, (user_id, number) in enumerate(counts.items()):
+            if index % 10_000 == 0:
+                check_shutdown()
             writer.writerow([user_id, number])
 
+    check_shutdown()
     temporary.replace(destination)
-    return str(destination)
+    return str(category)
 
 
-def launch_parallel_func(directory, func, text, init=None):
-    """shared fn for parallel crawling of dataset"""
+def launch_parallel_func(directory, func, text, init=None, *, output_suffix=".csv.gz"):
+    """Skip completed outputs and render all worker progress in the parent."""
 
     category_urls = get_category_list()
-
     directory.mkdir(parents=True, exist_ok=True)
+    pending = [
+        item
+        for item in category_urls.items()
+        if not (directory / f"{item[0]}{output_suffix}").exists()
+    ]
+    completed = len(category_urls) - len(pending)
 
-    # prep process pool for parallel workers
-    with ProcessPoolExecutor(max_workers=4, initializer=init) as pool:
-        active_tasks = [pool.submit(func, item) for item in category_urls.items()]
+    for category in category_urls:
+        if (directory / f"{category}{output_suffix}").exists():
+            tqdm.write(f"Finished: {category:<35} Already completed prior.")
 
-        for task in tqdm(
-            as_completed(active_tasks),
-            total=len(active_tasks),
-            desc="Collecting",
-            unit=" categories",
-        ):
-            tqdm.write(f"Finished: {task.result()}")
+    interrupted = False
+    with ExitStack() as display:
+        overall = display.enter_context(
+            tqdm(
+                total=len(category_urls),
+                initial=completed,
+                desc="Collecting",
+                unit=" categories",
+                position=0,
+            )
+        )
+        if pending:
+            worker_lines = [
+                display.enter_context(
+                    tqdm(
+                        desc="Waiting",
+                        total=None,
+                        position=position,
+                        bar_format="Processing: {desc} {n:,.0f} read",
+                        leave=False,
+                    )
+                )
+                for position in range(1, min(4, len(pending)) + 1)
+            ]
+            worker_slots = {}
+
+            # Workers send small status messages; only this process draws text.
+            context = get_context("spawn")
+            progress_queue = context.Queue()
+            stop_event = context.Event()
+            try:
+                with ProcessPoolExecutor(
+                    max_workers=4,
+                    mp_context=context,
+                    initializer=init_progress,
+                    initargs=(progress_queue, stop_event, init),
+                ) as pool:
+                    active_tasks = set()
+                    try:
+                        active_tasks = {pool.submit(run_category, func, item) for item in pending}
+                        while active_tasks:
+                            done, active_tasks = wait(
+                                active_tasks, timeout=0.1, return_when=FIRST_COMPLETED
+                            )
+                            while True:
+                                try:
+                                    pid, category, rows, phase = progress_queue.get_nowait()
+                                except Empty:
+                                    break
+                                if pid not in worker_slots:
+                                    worker_slots[pid] = worker_lines[len(worker_slots)]
+                                line = worker_slots[pid]
+                                if phase == "writing":
+                                    line.bar_format = " "
+                                    line.clear()
+                                    continue
+                                line.bar_format = "Processing: {desc} {n:,.0f} read"
+                                line.set_description_str(f"{category:<35}", refresh=False)
+                                line.n = rows
+                                line.refresh()
+
+                            for task in done:
+                                result = task.result()
+                                overall.update(1)
+                                # Refresh immediately even when completions are close together.
+                                overall.refresh()
+                                tqdm.write(f"Finished: {result}")
+                    except KeyboardInterrupt:
+                        interrupted = True
+                        stop_event.set()
+                        for task in active_tasks:
+                            task.cancel()
+                        tqdm.write("Stopping workers; waiting for active reads to finish...")
+                        pool.shutdown(wait=True, cancel_futures=True)
+            finally:
+                progress_queue.close()
+                progress_queue.join_thread()
+
+    if interrupted:
+        print("\nStopped. Completed files are preserved; unfinished categories restart next run.")
+        raise SystemExit(130)
 
     print()
     print(text)
@@ -261,6 +394,8 @@ def parquet_category(item):
         return str(f"{category:<35} parquest previously imported")
 
     batch = []
+    check_shutdown()
+    report_progress(category)
 
     with requests.get(url, stream=True, timeout=120) as response:
         response.raise_for_status()
@@ -271,7 +406,12 @@ def parquet_category(item):
         rows = csv.DictReader(source)
 
         with pq.ParquetWriter(temporary, EVENT_SCHEMA, compression="zstd") as writer:
-            for row in rows:
+            rows_read = 0
+            for rows_read, row in enumerate(rows, start=1):
+                if rows_read % 10_000 == 0:
+                    check_shutdown()
+                if rows_read % PROGRESS_INTERVAL == 0:
+                    report_progress(category, rows_read)
                 if row["user_id"] not in cohort_ids:
                     continue  # skip user_ids not selected as cohort
 
@@ -289,10 +429,13 @@ def parquet_category(item):
                     writer.write_table(table)
                     batch.clear()
 
+            check_shutdown()
+            report_progress(category, rows_read, "writing")
             if batch:
                 table = pa.Table.from_pylist(batch, schema=EVENT_SCHEMA)
                 writer.write_table(table)
 
+    check_shutdown()
     temporary.replace(destination)
     return str(category)
 
@@ -428,7 +571,8 @@ if __name__ == "__main__":
         ]
 
         # cleanup
-        map(launch_cleanup, filepaths)
+        for directory in filepaths:
+            launch_cleanup(directory)
 
         cin = input("\t>> ").lower()
 
@@ -452,6 +596,7 @@ if __name__ == "__main__":
                     parquet_category,
                     "Checkpoint: raw data imported. You may merge users now.",
                     init_cohort,
+                    output_suffix=".parquet",
                 )
 
             case "5":
@@ -467,7 +612,8 @@ if __name__ == "__main__":
 
             case "9":
                 print("Cleaning up...")
-                map(launch_cleanup, filepaths)
+                for directory in filepaths:
+                    launch_cleanup(directory)
                 print("Cleaned.")
                 input("\033[3mPress Enter to continue...\033[0m")
 
