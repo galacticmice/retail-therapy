@@ -29,11 +29,16 @@ You will need ~15 GB of space to store a subset of the dataset locally.
 
 <br />
 
-### Setup
-
+###
+* stage environment
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+```
 * data preparation
 ```sh
-python3 dataset.py
+python3 src/retail-therapy/dataset.py
 ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
