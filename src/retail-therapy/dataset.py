@@ -43,7 +43,6 @@ def init_progress(progress_queue, stop_event, initializer):
         initializer()
 
 
-
 class ShutdownRequested(Exception):
     pass
 
@@ -187,14 +186,18 @@ def launch_parallel_func(directory, func, text, init=None, *, output_suffix=".cs
                 ) as pool:
                     active_tasks = set()
                     try:
-                        active_tasks = {pool.submit(run_category, func, item) for item in pending}
+                        active_tasks = {
+                            pool.submit(run_category, func, item) for item in pending
+                        }
                         while active_tasks:
                             done, active_tasks = wait(
                                 active_tasks, timeout=0.1, return_when=FIRST_COMPLETED
                             )
                             while True:
                                 try:
-                                    pid, category, rows, phase = progress_queue.get_nowait()
+                                    pid, category, rows, phase = (
+                                        progress_queue.get_nowait()
+                                    )
                                 except Empty:
                                     break
                                 if pid not in worker_slots:
@@ -205,7 +208,9 @@ def launch_parallel_func(directory, func, text, init=None, *, output_suffix=".cs
                                     line.clear()
                                     continue
                                 line.bar_format = "Processing: {desc} {n:,.0f} read"
-                                line.set_description_str(f"{category:<35}", refresh=False)
+                                line.set_description_str(
+                                    f"{category:<35}", refresh=False
+                                )
                                 line.n = rows
                                 line.refresh()
 
@@ -220,14 +225,18 @@ def launch_parallel_func(directory, func, text, init=None, *, output_suffix=".cs
                         stop_event.set()
                         for task in active_tasks:
                             task.cancel()
-                        tqdm.write("Stopping workers; waiting for active reads to finish...")
+                        tqdm.write(
+                            "Stopping workers; waiting for active reads to finish..."
+                        )
                         pool.shutdown(wait=True, cancel_futures=True)
             finally:
                 progress_queue.close()
                 progress_queue.join_thread()
 
     if interrupted:
-        print("\nStopped. Completed files are preserved; unfinished categories restart next run.")
+        print(
+            "\nStopped. Completed files are preserved; unfinished categories restart next run."
+        )
         raise SystemExit(130)
 
     print()
@@ -476,6 +485,7 @@ def launch_parquet_combine():
 
     temporary.replace(destination)
     print()
+    print("Merging...")
     print(f"Merge completed: logged {actual_rows:,} events.")
     input("\033[3mPress Enter to continue...\033[0m")
 
