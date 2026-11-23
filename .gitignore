@@ -18,3 +18,4 @@ uv.lock
 data/
 *.csv
 *.gz
+*.parquet
