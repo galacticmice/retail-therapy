@@ -1,6 +1,7 @@
 import csv
 import gzip
 import hashlib
+import json
 import os
 import shutil
 import signal
@@ -19,6 +20,7 @@ from tqdm import tqdm
 
 CATEGORIES_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/all_categories.txt"
 BASE_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/benchmark/0core/rating_only"
+METADATA_URL = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/raw/meta_categories"
 
 PREPFOLDER_PATH = (Path(__file__).resolve().parent / "../../data/prep").resolve()
 RAWFOLDER_PATH = (Path(__file__).resolve().parent / "../../data/raw").resolve()
@@ -131,20 +133,28 @@ def count_category(category_dict):
     return str(category)
 
 
-def launch_parallel_func(directory, func, text, init=None, *, output_suffix=".csv.gz"):
+def launch_parallel_func(
+    directory, func, text, init=None, *, output_suffix=".csv.gz",
+    items=None, is_complete=None, pause=True,
+):
     """Skip completed outputs and render all worker progress in the parent."""
 
-    category_urls = get_category_list()
+    category_urls = get_category_list() if items is None else items
     directory.mkdir(parents=True, exist_ok=True)
+    completed_categories = {
+        category for category, value in category_urls.items()
+        if (is_complete((category, value)) if is_complete is not None
+            else (directory / f"{category}{output_suffix}").exists())
+    }
     pending = [
         item
         for item in category_urls.items()
-        if not (directory / f"{item[0]}{output_suffix}").exists()
+        if item[0] not in completed_categories
     ]
     completed = len(category_urls) - len(pending)
 
     for category in category_urls:
-        if (directory / f"{category}{output_suffix}").exists():
+        if category in completed_categories:
             tqdm.write(f"Finished: {category:<35} Already completed prior.")
 
     interrupted = False
@@ -241,7 +251,8 @@ def launch_parallel_func(directory, func, text, init=None, *, output_suffix=".cs
 
     print()
     print(text)
-    input("\033[3mPress Enter to continue...\033[0m")
+    if pause:
+        input("\033[3mPress Enter to continue...\033[0m")
 
 
 def launch_merge_counters():
@@ -449,25 +460,193 @@ def parquet_category(item):
     return str(category)
 
 
+def title_source_fingerprint(events_file):
+    source_stat = events_file.stat()
+    return (
+        f"{events_file.resolve()}:{source_stat.st_size}:{source_stat.st_mtime_ns}"
+    ).encode()
+
+
+def category_titles_complete(item):
+    category, (events_file, directory, _) = item
+    destination = directory / f"{category}.parquet"
+    return destination.exists() and (
+        pq.ParquetFile(destination).schema_arrow.metadata or {}
+    ).get(b"events_source") == title_source_fingerprint(events_file)
+
+
+def import_titles_worker(item):
+    category, (events_file, directory, metadata_url) = item
+    destination = import_category_titles(
+        events_file, directory=directory, metadata_url=metadata_url
+    )
+    count = pq.ParquetFile(destination).metadata.num_rows
+    return f"{category}: {count:,} product titles"
+
+
+def import_category_titles(events_file, *, directory=None, metadata_url=None):
+    """Stream product metadata; cache only cohort product IDs and their titles."""
+    category = events_file.stem
+    directory = PREPFOLDER_PATH / "titles" if directory is None else directory
+    metadata_url = METADATA_URL if metadata_url is None else metadata_url
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / f"{category}.parquet"
+    temporary = destination.with_suffix(".parquet.partial")
+    if category_titles_complete((category, (events_file, directory, metadata_url))):
+        return destination
+    fingerprint = title_source_fingerprint(events_file)
+    check_shutdown()
+    report_progress(category)
+
+    # Bound memory to product IDs, rather than loading all events or metadata.
+    needed = set()
+    for batch in pq.ParquetFile(events_file).iter_batches(columns=["parent_asin"]):
+        check_shutdown()
+        needed.update(asin for asin in batch.column(0).to_pylist() if asin)
+
+    schema = pa.schema(
+        [
+            ("parent_asin", pa.string()),
+            ("category", pa.string()),
+            ("title", pa.string()),
+        ],
+        metadata={b"events_source": fingerprint},
+    )
+    batch = []
+    with pq.ParquetWriter(temporary, schema, compression="zstd") as writer:
+        if needed:
+            url = f"{metadata_url}/meta_{category}.jsonl"
+            with requests.get(url, stream=True, timeout=120) as response:
+                response.raise_for_status()
+                lines = response.iter_lines(chunk_size=1024 * 1024)
+                for number, line in enumerate(lines, 1):
+                    if number % 10_000 == 0:
+                        check_shutdown()
+                    if number % PROGRESS_INTERVAL == 0:
+                        report_progress(category, number)
+                    if not line.strip():
+                        continue
+                    product = json.loads(line)
+                    asin, title = product.get("parent_asin"), product.get("title")
+                    if (
+                        asin not in needed
+                        or not isinstance(title, str)
+                        or not title.strip()
+                    ):
+                        continue
+                    batch.append(
+                        {
+                            "parent_asin": asin,
+                            "category": category,
+                            "title": title.strip(),
+                        }
+                    )
+                    needed.remove(asin)  # Keep one nonempty title per product.
+                    if len(batch) >= 10_000:
+                        writer.write_table(pa.Table.from_pylist(batch, schema=schema))
+                        batch.clear()
+                    if not needed:
+                        break
+        report_progress(category, phase="writing")
+        if batch:
+            writer.write_table(pa.Table.from_pylist(batch, schema=schema))
+    check_shutdown()
+    temporary.replace(destination)
+    if needed and _progress_queue is None:
+        tqdm.write(
+            f"{category}: {len(needed):,} products have no metadata title; retaining null titles."
+        )
+    return destination
+
+
+def record_title_product_source(sources, products):
+    manifest = PREPFOLDER_PATH / "titles/products/source.json"
+    temporary = manifest.with_suffix(".json.partial")
+    temporary.write_text(json.dumps({
+        "sources": [title_source_fingerprint(file).decode() for file in sources],
+        "categories": [file.stem for file in products],
+    }))
+    temporary.replace(manifest)
+
+
+def title_product_files(sources):
+    """Index distinct products from the selected events, once for all workers."""
+    directory = PREPFOLDER_PATH / "titles/products"
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = directory / "source.json"
+    if manifest.exists():
+        cached = json.loads(manifest.read_text())
+        files = [directory / f"{category}.parquet" for category in cached["categories"]]
+        if cached["sources"] == [
+            title_source_fingerprint(file).decode() for file in sources
+        ] and all(file.exists() for file in files):
+            return files
+
+    products = (
+        pl.scan_parquet(sources)
+        .select(["parent_asin", "category"])
+        .unique()
+        .collect(engine="streaming")
+    )
+    files = []
+    for (category,), group in products.partition_by("category", as_dict=True).items():
+        destination = directory / f"{category}.parquet"
+        temporary = destination.with_suffix(".parquet.partial")
+        group.select("parent_asin").write_parquet(temporary, compression="zstd")
+        temporary.replace(destination)
+        files.append(destination)
+    record_title_product_source(sources, files)
+    return files
+
+
 def launch_parquet_combine():
-    """combines raw categorical parquet files into one cleaned dataset"""
-
-    files = sorted(RAWFOLDER_PATH.glob("*.parquet"))
-
-    if len(files) != 34:
-        launch_cleanup(RAWFOLDER_PATH)
-        print(f"Expected 34 files, but only found {len(files)}!")
-        input("\033[3mPress Enter to abort...\033[0m")
-        return
-
-    expected_rows = sum(pq.ParquetFile(file).metadata.num_rows for file in files)
-
+    """Add titles to existing sorted events; build from raw only on the first run."""
     PROCESSEDFOLDER_PATH.mkdir(parents=True, exist_ok=True)
     destination = PROCESSEDFOLDER_PATH / "events_dataset.parquet"
     temporary = destination.with_suffix(".parquet.partial")
+    if destination.exists():
+        files = [destination]
+        events = pl.scan_parquet(destination)
+    else:
+        files = sorted(RAWFOLDER_PATH.glob("*.parquet"))
+        if len(files) != 34:
+            launch_cleanup(RAWFOLDER_PATH)
+            print(f"Expected 34 files, but only found {len(files)}!")
+            input("\033[3mPress Enter to abort...\033[0m")
+            return
+        events = pl.scan_parquet(files).sort(["user_id", "timestamp"])
+
+    expected_rows = sum(pq.ParquetFile(file).metadata.num_rows for file in files)
+    if not expected_rows:
+        print("No events to enrich.")
+        return
+    product_files = title_product_files(files)
+    title_directory = PREPFOLDER_PATH / "titles"
+    title_items = {
+        file.stem: (file, title_directory, METADATA_URL) for file in product_files
+    }
+    launch_parallel_func(
+        title_directory,
+        import_titles_worker,
+        "Product title import completed; merging events...",
+        output_suffix=".parquet",
+        items=title_items,
+        is_complete=category_titles_complete,
+        pause=False,
+    )
+    title_files = [title_directory / file.name for file in product_files]
+    # Replace a previous title column without dropping any other event context.
+    if "title" in events.collect_schema().names():
+        events = events.drop("title")
     (
-        pl.scan_parquet(files)
-        .sort(["user_id", "timestamp"])
+        events
+        .join(
+            pl.scan_parquet(title_files),
+            on=["parent_asin", "category"],
+            how="left",
+            validate="m:1",
+            maintain_order="left",
+        )
         .sink_parquet(
             temporary, compression="zstd", engine="streaming", maintain_order=True
         )
@@ -482,8 +661,10 @@ def launch_parquet_combine():
         )
         print("Performing cleanup...")
         input("\033[3mPress Enter to abort...\033[0m")
+        return
 
     temporary.replace(destination)
+    record_title_product_source([destination], product_files)
     print()
     print("Merging...")
     print(f"Merge completed: logged {actual_rows:,} events.")
@@ -565,7 +746,7 @@ if __name__ == "__main__":
         [2] Merge and scan eligible users (~6 mins, ~700mb)
         [3] Hash-select 15% of users to decrease space
         [4] Import raw cohort data (~30 mins, ~2gb)
-        [5] Merge cohort data
+        [5] Import product titles and merge cohort data
 
         [9] Cleanup all incomplete files (safe)
         [0] Erase and reset all preparation files

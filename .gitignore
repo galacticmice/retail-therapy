@@ -20,3 +20,6 @@ data/
 *.gz
 *.parquet
 GUI_backup_before_pull/
+
+# test
+test/

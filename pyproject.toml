@@ -11,3 +11,8 @@ dependencies = [
     "requests>=2.34.2",
     "seaborn>=0.13.2",
 ]
+
+[project.optional-dependencies]
+categorization = [
+    "sentence-transformers>=3.0,<6",
+]
