@@ -22,4 +22,5 @@ data/
 GUI_backup_before_pull/
 
 # test
-test/
+tests/
+README_categorization.md
