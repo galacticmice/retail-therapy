@@ -48,6 +48,11 @@ python3 src/retail-therapy/categorical_ml.py --full
 ```sh
 python3 src/retail-therapy/next_category.py --full --epochs 3
 ```
+* launch simulator
+```sh
+python3 src/retail-therapy/purchase_simulator.py
+```
+
 
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
