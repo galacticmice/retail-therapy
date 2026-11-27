@@ -1,5 +1,3 @@
-"""terminal launcher for data preparation, models, and simulator"""
-
 import os
 import shlex
 import subprocess
