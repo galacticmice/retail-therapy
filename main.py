@@ -22,12 +22,18 @@ def launch_script(filename, flags=()):
         return 1
 
     # parent and child receive terminal Ctrl-C, let the child finish cleanup
+    interrupted = False
     while True:
         try:
             result = process.wait()
             break
         except KeyboardInterrupt:
+            interrupted = True
             print("\nWaiting for stage to finish stopping...", flush=True)
+    # leave the launcher after stopping the simulator, skip help-only calls
+    if interrupted and filename == "purchase_simulator.py":
+        if "--help" not in flags and "-h" not in flags:
+            raise KeyboardInterrupt
     if result != 0:
         print(f"Stage exited with code {result}")
     return result

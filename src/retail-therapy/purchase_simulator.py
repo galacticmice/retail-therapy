@@ -94,11 +94,13 @@ def render_page(model, history, selected=0, error=""):
     result = {"history": [names[category_id] for category_id in history], "top5": []}
     if not error:
         result = prediction_result(model, history)
+    # newest first for display, model and form history stay in purchase order
+    displayed_history = result["history"][::-1]
     template = Template(PAGE_PATH.read_text())
     return template.substitute(
         options="\n".join(options),
         history=escape(json.dumps(history), quote=True),
-        history_output=escape(json.dumps(result["history"], indent=2, ensure_ascii=False)),
+        history_output=escape(json.dumps(displayed_history, indent=2, ensure_ascii=False)),
         predictions=escape(
             json.dumps(result["top5"], indent=2, ensure_ascii=False, allow_nan=False)
         ),
