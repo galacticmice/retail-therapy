@@ -15,15 +15,13 @@ venv/
 uv.lock
 
 # project
-data/
+data/prep/
+data/processed/
+data/raw/
 *.csv
 *.gz
 *.parquet
-GUI_backup_before_pull/
 
 # test
-README-categorization.md
-README-prediction.md
-README-simulator.md
-README-launcher.md
 tests/
+*.metrics.json
