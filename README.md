@@ -30,28 +30,41 @@ Final cleaned dataset is around ~7 GB.
 
 
 ###
-* stage environment
+Stage environment
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 ```
-* data preparation
+
+From the repository root:
+
 ```sh
-python3 src/retail-therapy/dataset.py
+python main.py
 ```
-* launch classifier model
+
+Or use the environment explicitly:
+
 ```sh
-python3 src/retail-therapy/categorical_ml.py --full
+.venv/bin/python main.py
 ```
-* train prediction model
-```sh
-python3 src/retail-therapy/next_category.py --full --epochs 3
-```
-* launch simulator
-```sh
-python3 src/retail-therapy/purchase_simulator.py
-```
+
+<!-- * data preparation -->
+<!-- ```sh -->
+<!-- python3 src/retail-therapy/dataset.py -->
+<!-- ``` -->
+<!-- * launch classifier model -->
+<!-- ```sh -->
+<!-- python3 src/retail-therapy/categorical_ml.py --full -->
+<!-- ``` -->
+<!-- * train prediction model -->
+<!-- ```sh -->
+<!-- python3 src/retail-therapy/next_category.py --full --epochs 3 -->
+<!-- ``` -->
+<!-- * launch simulator -->
+<!-- ```sh -->
+<!-- python3 src/retail-therapy/purchase_simulator.py -->
+<!-- ``` -->
 
 
 
