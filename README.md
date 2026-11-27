@@ -43,11 +43,11 @@ python3 src/retail-therapy/dataset.py
 ```
 * launch classifier model
 ```sh
-python3 src/retail-therapy/categorical_ml.py
+python3 src/retail-therapy/categorical_ml.py --full
 ```
-* launch real-time prediction model
+* train prediction model
 ```sh
-python3 src/retail-therapy/next_category.py.py
+python3 src/retail-therapy/next_category.py --full --epochs 3
 ```
 
 

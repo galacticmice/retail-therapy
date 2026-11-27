@@ -89,25 +89,31 @@ _classifier = None
 
 
 def normalize(value):
-    return " ".join(value.lower().split()) if isinstance(value, str) else ""
+    if isinstance(value, str):
+        return " ".join(value.lower().split())
+    return ""
 
 
 def load_taxonomy(path=TAXONOMY_PATH):
+    """load category names and keep their existing IDs"""
     taxonomy = json.loads(Path(path).read_text())
     if not isinstance(taxonomy, dict) or len(taxonomy) != 148:
         raise ValueError("Expected 148 category names and IDs")
-    if any(type(v) is not int for v in taxonomy.values()) or list(
+    if any(type(category_id) is not int for category_id in taxonomy.values()) or list(
         taxonomy.values()
     ) != list(range(148)):
         raise ValueError("Preserve the existing category order and IDs 0 through 147")
-    if any(len(k.split(" / ")) != 2 or not all(k.split(" / ")) for k in taxonomy):
-        raise ValueError("Expected parent / fine category names")
+    for name in taxonomy:
+        parts = name.split(" / ")
+        if len(parts) != 2 or not all(parts):
+            raise ValueError("Expected parent / fine category names")
     return taxonomy
 
 
 def build_classifier(
     taxonomy, descriptions, word_weight=0.7, char_weight=0.3, cache_size=0
 ):
+    """build word and character references for the taxonomy"""
     weights = np.asarray([word_weight, char_weight], dtype=np.float64)
     if not np.isfinite(weights).all() or (weights < 0).any() or weights.sum() <= 0:
         raise ValueError(
@@ -116,25 +122,32 @@ def build_classifier(
     if not 0 <= cache_size <= 4096:
         raise ValueError("Cache size must be within [0, 4096]")
     weights /= weights.sum()
+
+    # group fine categories under their parent
     parents = {}
     for name, category_id in taxonomy.items():
         parents.setdefault(name.split(" / ")[0], []).append(category_id)
     eligible = {normalize(parent): tuple(ids) for parent, ids in parents.items()}
     for category, groups in BRIDGE.items():
-        eligible[normalize(category.replace("_", " "))] = tuple(
-            sorted({i for g in groups for i in parents[g]})
-        )
-    # unknown is a source label, use title-only matching.
+        category_ids = set()
+        for parent in groups:
+            category_ids.update(parents[parent])
+        category_name = normalize(category.replace("_", " "))
+        eligible[category_name] = tuple(sorted(category_ids))
+
+    # unknown category, match using title only
     eligible["unknown"] = tuple(taxonomy.values())
     documents = [
         name.split(" / ")[1] + ". " + descriptions.get(name, "") for name in taxonomy
     ]
+
+    # fit word and character references once
     vectors = []
     for weight, options in zip(
         weights,
         [
-            dict(analyzer="word", ngram_range=(1, 2)),
-            dict(analyzer="char_wb", ngram_range=(3, 5)),
+            {"analyzer": "word", "ngram_range": (1, 2)},
+            {"analyzer": "char_wb", "ngram_range": (3, 5)},
         ],
     ):
         if weight:
@@ -148,9 +161,12 @@ def build_classifier(
             references = vectorizer.fit_transform(documents)
             grouped = {ids: references[list(ids)].T for ids in set(eligible.values())}
             vectors.append((float(weight), vectorizer, grouped))
-    return dict(
-        vectors=vectors, eligible=eligible, cache=OrderedDict(), cache_size=cache_size
-    )
+    return {
+        "vectors": vectors,
+        "eligible": eligible,
+        "cache": OrderedDict(),
+        "cache_size": cache_size,
+    }
 
 
 def init_classifier(
@@ -168,6 +184,7 @@ def init_classifier(
 
 
 def pack_scores(scores, category_ids):
+    """keep top three matches as category and weight bytes"""
     scores, category_ids = np.asarray(scores), np.asarray(category_ids)
     if scores.ndim != 2 or category_ids.shape != (scores.shape[1],):
         raise ValueError("Expected a score matrix and one ID per score column")
@@ -185,6 +202,8 @@ def pack_scores(scores, category_ids):
     ):
         raise ValueError("Matching scores must be finite and nonnegative")
     scores = scores.astype(np.float64, copy=False)
+
+    # lower category ID wins when scores are tied
     order = np.argsort(category_ids)
     scores, category_ids = scores[:, order], category_ids[order]
     total = scores.sum(axis=1, keepdims=True)
@@ -192,10 +211,14 @@ def pack_scores(scores, category_ids):
         raise ValueError("Matching score sum overflow")
     best = np.argsort(-scores, axis=1, kind="stable")[:, :3]
     top_scores = np.take_along_axis(scores, best, axis=1)
+
+    # keep weights relative to all matches
     selected = np.divide(
         top_scores, total, out=np.zeros_like(top_scores), where=total > 0
     )
     ids = category_ids[best]
+
+    # three category and weight pairs, six bytes per row
     packed = np.zeros((len(scores), 6), dtype=np.uint8)
     packed[:, 0::2] = 255
     count = best.shape[1]
@@ -216,22 +239,23 @@ def predictions_to_arrow(packed):
 
 
 def decode_top3(packed):
+    """read category IDs and weights from packed predictions"""
     if isinstance(packed, pa.ChunkedArray):
         packed = packed.combine_chunks()
     if isinstance(packed, pa.Array):
         if packed.type != PREDICTION_TYPE or packed.null_count:
             raise ValueError("Expected non-null fixed_size_binary[6]")
         packed.validate(full=True)
-        packed = (
-            np.frombuffer(
+        # read bytes directly from the Arrow buffer
+        if len(packed):
+            packed = np.frombuffer(
                 packed.buffers()[1],
                 dtype=np.uint8,
                 count=len(packed) * 6,
                 offset=packed.offset * 6,
             ).reshape(-1, 6)
-            if len(packed)
-            else np.empty((0, 6), dtype=np.uint8)
-        )
+        else:
+            packed = np.empty((0, 6), dtype=np.uint8)
     packed = np.asarray(packed)
     if packed.dtype != np.uint8 or packed.ndim != 2 or packed.shape[1] != 6:
         raise ValueError("Expected uint8 (rows, 6)")
@@ -251,16 +275,18 @@ def decode_top3(packed):
 
 
 def classify_titles(titles, categories, classifier):
+    """match titles within their broad category"""
     if len(titles) != len(categories):
         raise ValueError("Title and category batch lengths differ")
     packed = np.zeros((len(titles), 6), dtype=np.uint8)
     packed[:, 0::2] = 255
-    groups, counts = {}, dict(missing_title=0, zero_match=0, cache_hits=0)
+    groups = {}
+    counts = {"missing_title": 0, "zero_match": 0, "cache_hits": 0}
     for index, (title, category) in enumerate(zip(titles, categories)):
         title = normalize(title)
-        category = normalize(
-            category.replace("_", " ") if isinstance(category, str) else category
-        )
+        if isinstance(category, str):
+            category = category.replace("_", " ")
+        category = normalize(category)
         eligible = classifier["eligible"].get(category)
         if not eligible:
             continue
@@ -286,6 +312,7 @@ def classify_titles(titles, categories, classifier):
                 else:
                     uncached.append(title)
         if uncached:
+            # compare titles against eligible categories
             scores = np.zeros((len(uncached), len(eligible)), dtype=np.float32)
             for weight, vectorizer, references in classifier["vectors"]:
                 scores += (
@@ -296,6 +323,7 @@ def classify_titles(titles, categories, classifier):
             row_groups = [titles_to_rows[title] for title in uncached]
             lengths = np.fromiter(map(len, row_groups), dtype=np.intp)
             rows = np.fromiter(chain.from_iterable(row_groups), dtype=np.intp)
+            # reuse matches for repeated titles, keep every event
             packed[rows] = np.repeat(result, lengths, axis=0)
             counts["zero_match"] += int(lengths[result[:, 0] == 255].sum())
             if classifier["cache_size"]:
@@ -322,7 +350,7 @@ def digest(path):
 
 
 def make_visible(path):
-    # macOS hard linking causes hidden files--workaround
+    # clear hidden flag on macOS if needed
     if hasattr(os, "chflags"):
         flags = path.stat().st_flags
         if flags & stat.UF_HIDDEN:
@@ -364,7 +392,9 @@ def ordered_results(tasks, workers, initargs, pool=None):
 
 
 def read_descriptions(path, taxonomy):
-    descriptions = json.loads(Path(path).read_text()) if Path(path).exists() else {}
+    descriptions = {}
+    if Path(path).exists():
+        descriptions = json.loads(Path(path).read_text())
     if any(not isinstance(value, str) for value in descriptions.values()):
         raise ValueError("Descriptions must be strings")
     missing = set(taxonomy) - descriptions.keys()
@@ -387,8 +417,12 @@ def classify_file(
     limit=None,
     keep_checkpoints=False,
 ):
+    """classify batches, then add predictions to the dataset"""
     events = Path(events).resolve()
-    output = events if output is None else Path(output).absolute()
+    if output is None:
+        output = events
+    else:
+        output = Path(output).absolute()
     if output.is_symlink() or (output.exists() and output.resolve() != events):
         raise FileExistsError("Output already exists or aliases another file")
     if batch_size < 1 or (limit is not None and limit < 1):
@@ -396,6 +430,7 @@ def classify_file(
     taxonomy = load_taxonomy()
     descriptions = read_descriptions(DESCRIPTIONS_PATH, taxonomy)
     initargs = (taxonomy, descriptions, word_weight, char_weight, cache_size)
+
     # check parameters before opening checkpoints
     build_classifier(*initargs)
     with pq.ParquetFile(events) as source:
@@ -411,21 +446,21 @@ def classify_file(
         raise ValueError("Limited pilots must use a separate output")
     directory = Path(work_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    config = dict(
-        version="tfidf-relative-weight-v2-unknown-fallback",
-        source=str(events),
-        sha256=digest(events),
-        rows=total,
-        batch_size=batch_size,
-        taxonomy=taxonomy,
-        descriptions=descriptions,
-        bridge=BRIDGE,
-        word_weight=word_weight,
-        char_weight=char_weight,
-        sklearn=sklearn.__version__,
-        numpy=np.__version__,
-        pyarrow=pa.__version__,
-    )
+    config = {
+        "version": "tfidf-relative-weight-v2-unknown-fallback",
+        "source": str(events),
+        "sha256": digest(events),
+        "rows": total,
+        "batch_size": batch_size,
+        "taxonomy": taxonomy,
+        "descriptions": descriptions,
+        "bridge": BRIDGE,
+        "word_weight": word_weight,
+        "char_weight": char_weight,
+        "sklearn": sklearn.__version__,
+        "numpy": np.__version__,
+        "pyarrow": pa.__version__,
+    }
     manifest = directory / "source.json"
     if manifest.exists() and json.loads(manifest.read_text()) != config:
         raise ValueError("Checkpoint configuration changed; use a new work directory")
@@ -449,7 +484,8 @@ def classify_file(
         except (ValueError, pa.ArrowException, KeyError):
             return False
 
-    completed = {i for i in range(batches) if valid(i)}
+    # reuse completed batches from an interrupted run
+    completed = {index for index in range(batches) if valid(index)}
 
     def tasks():
         with pq.ParquetFile(events) as source:
@@ -489,20 +525,19 @@ def classify_file(
                             sample["category"].to_pylist(),
                         )
                     )
-        # Disable LRU reuse in both benchmark arms to avoid warmup bias
+        # turn off cache so both worker counts get the same work
         benchmark_args = (*initargs[:-1], 0)
         timings = {}
         for count in (1, 4):
-            context = (
-                ProcessPoolExecutor(
+            if count > 1:
+                context = ProcessPoolExecutor(
                     max_workers=count,
                     mp_context=get_context("spawn"),
                     initializer=init_classifier,
                     initargs=benchmark_args,
                 )
-                if count > 1
-                else nullcontext(None)
-            )
+            else:
+                context = nullcontext(None)
             with context as pool:
                 if count == 1:
                     init_classifier(*benchmark_args, child=False)
@@ -550,6 +585,8 @@ def classify_file(
             )
             temporary.replace(path)
             progress.update(1)
+
+    # write predictions alongside the original columns
     metadata = {
         key: value
         for key, value in (schema.metadata or {}).items()
@@ -571,7 +608,7 @@ def classify_file(
     )
     os.close(fd)
     temporary = Path(name)
-    counts = dict(missing_title=0, zero_match=0, cache_hits=0)
+    counts = {"missing_title": 0, "zero_match": 0, "cache_hits": 0}
     try:
         with (
             pq.ParquetFile(events) as source,
@@ -601,6 +638,7 @@ def classify_file(
                     )
                 )
                 progress.update(len(batch))
+        # replace dataset only after checking the completed file
         print("Verifying output and source...")
         if (
             pq.ParquetFile(temporary).metadata.num_rows != total
