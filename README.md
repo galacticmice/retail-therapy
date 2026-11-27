@@ -25,7 +25,8 @@ Describe a temporal relationship of events using `timestamp` by transitioning to
 
 ## Getting Started
 
-You will need ~15 GB of space to store a subset of the dataset locally.
+You will need ~15 GB of empty space to store preparation files of dataset.
+Final cleaned dataset is around ~7 GB.
 
 <br />
 
