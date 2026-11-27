@@ -36,10 +36,19 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 ```
-* data preparation
+* data preparation(run through all steps to download and clean data)
 ```sh
 python3 src/retail-therapy/dataset.py
 ```
+* launch classifier model
+```sh
+python3 src/retail-therapy/categorical_ml.py
+```
+* launch real-time prediction model
+```sh
+python3 src/retail-therapy/next_category.py.py
+```
+
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -62,7 +71,7 @@ SETUP DESCRIPTION HERE
         - *using `ParallelPoolExecutor`* and `polars` for large dataset
 
 💪 Training
-- [ ] Train working (broad) predictor
+- [x] Train working (broad) predictor
     - [ ] Evaluate quality and test on larger random dataset
 
 ✨ UI
@@ -71,10 +80,10 @@ SETUP DESCRIPTION HERE
     - [ ] Multi-label dynamic prediction
 
 🤓 Stretch Goals
-- [ ] Add finer labels with assistance of second model
+- [x] Add finer labels with assistance of second model
     - *Instead of "Electronics" -> "Keyboard"*
     - *Instead of "All_Beauty" -> "Shampoo"*
-- [ ] Time series analysis with RBF kernel
+- [x] Time series analysis with ~~RBF kernel~~timescale exponential decay
     - *Transition from naive-sequential to time-weighted predictions*
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
