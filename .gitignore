@@ -24,4 +24,5 @@ GUI_backup_before_pull/
 # test
 README-categorization.md
 README-prediction.md
+README-simulator.md
 tests/

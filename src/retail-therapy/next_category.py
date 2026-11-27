@@ -20,23 +20,20 @@ from categorical_ml import EVENTS_PATH, MAPPING_KEY, decode_top3, load_taxonomy
 
 DAY_MS = 86_400_000
 TIMESCALES = np.array([1.0, 7.0, 30.0, 180.0])
+PURCHASE_SCALES = np.array([1.0, 3.0, 10.0, 30.0])
+PURCHASE_DECAY = np.exp(-1 / PURCHASE_SCALES).astype(np.float32)
+TIME_WEIGHT_FLOOR = 0.1
 CATEGORY_COUNT = 148
 FEATURE_COUNT = 740
-MODEL_PATH = Path(__file__).resolve().parents[2] / "data/models/next_category.npz"
+MODEL_PATH = Path(__file__).resolve().parents[2] / "data/models/next_category_sequence.npz"
 
 
-def validate_history(timestamps, category_ids, category_weights):
-    timestamps = np.asarray(timestamps)
+def validate_history(category_ids, category_weights):
     ids, weights = np.asarray(category_ids), np.asarray(category_weights)
-    if timestamps.shape == (0,) and ids.size == 0 and weights.size == 0:
-        return (
-            np.empty(0, dtype=np.int64),
-            np.empty((0, 3), dtype=np.uint8),
-            np.empty((0, 3), dtype=np.float32),
-        )
-    if timestamps.ndim != 1 or timestamps.dtype.kind not in "iu":
-        raise ValueError("Timestamps must be integer Unix milliseconds")
-    if ids.shape != (len(timestamps), 3) or weights.shape != ids.shape:
+    if ids.shape == (0,) and weights.shape == (0,):
+        ids = np.empty((0, 3), dtype=np.uint8)
+        weights = np.empty((0, 3), dtype=np.float32)
+    if ids.ndim != 2 or ids.shape[1] != 3 or weights.shape != ids.shape:
         raise ValueError("Expected category IDs and weights shaped (events, 3)")
     if ids.dtype.kind not in "iu" or ((ids < 0) | ((ids > 147) & (ids != 255))).any():
         raise ValueError("Category IDs must be 0 through 147 or sentinel 255")
@@ -54,34 +51,33 @@ def validate_history(timestamps, category_ids, category_weights):
     for i, j in ((0, 1), (0, 2), (1, 2)):
         if ((ids[:, i] == ids[:, j]) & (ids[:, i] != 255)).any():
             raise ValueError("Duplicate categories within an event")
-    if (timestamps[1:] < timestamps[:-1]).any():
-        raise ValueError("Histories must be chronological; ties retain supplied order")
-    return timestamps, ids, weights
+    return ids, weights
 
 
 def new_state():
-    """start empty purchase histories for each timescale"""
+    """start empty purchase histories for each sequence length"""
     return {
         "history": np.zeros((4, CATEGORY_COUNT), dtype=np.float32),
         "totals": np.zeros(CATEGORY_COUNT, dtype=np.float32),
-        "timestamp": None,
     }
 
 
-def update_state(state, timestamp, ids, weights):
-    timestamp = int(timestamp)
-
-    # decay older purchases before adding the new one
-    if state["timestamp"] is not None:
-        elapsed = timestamp - state["timestamp"]
-        if elapsed < 0:
-            raise ValueError("History timestamps decreased")
-        state["history"] *= np.exp(-(elapsed / DAY_MS) / TIMESCALES)[:, None]
+def update_state(state, ids, weights):
+    # advance one purchase, no real or assumed timestamps
+    state["history"] *= PURCHASE_DECAY[:, None]
     valid = ids != 255
     state["history"][:, ids[valid]] += weights[valid]
     state["totals"][ids[valid]] += weights[valid]
-    state["timestamp"] = timestamp
     return state
+
+
+def training_weights(gap_days):
+    """closer purchases carry more weight during learning only"""
+    gap_days = np.asarray(gap_days, dtype=np.float64)
+    if not np.isfinite(gap_days).all() or (gap_days < 0).any():
+        raise ValueError("Training gaps must be finite and nonnegative")
+    decay = np.exp(-gap_days[..., None] / TIMESCALES).mean(axis=-1)
+    return (TIME_WEIGHT_FLOOR + (1 - TIME_WEIGHT_FLOOR) * decay).astype(np.float32)
 
 
 def history_features(state):
@@ -101,7 +97,10 @@ def new_model():
         "bias": np.zeros(CATEGORY_COUNT, dtype=np.float32),
         "prior": np.zeros(CATEGORY_COUNT, dtype=np.float64),
         "metadata": {
-            "version": 1,
+            "version": 2,
+            "feature_definition": "purchase-decay-v1",
+            "purchase_scales": PURCHASE_SCALES.tolist(),
+            "time_weight_floor": TIME_WEIGHT_FLOOR,
             "taxonomy": load_taxonomy(),
             "timescales": TIMESCALES.tolist(),
             "timestamp_unit": "unix_ms",
@@ -124,23 +123,31 @@ def log_probabilities(model, features):
     return logits - np.log(np.exp(logits).sum(axis=1, keepdims=True))
 
 
-def predict_next(model, timestamps, category_ids, category_weights):
+def predict_next(model, category_ids, category_weights):
     """predict next category from history, keeps model and inputs unchanged"""
-    timestamps, ids, weights = validate_history(
-        timestamps, category_ids, category_weights
-    )
+    ids, weights = validate_history(category_ids, category_weights)
 
     # build history up to the last purchase
     state = new_state()
-    for timestamp, categories, values in zip(timestamps, ids, weights):
-        update_state(state, timestamp, categories, values)
+    for categories, values in zip(ids, weights):
+        update_state(state, categories, values)
     return np.exp(log_probabilities(model, history_features(state)[None, :])[0]).astype(
         np.float32
     )
 
 
-def loss_gradient(model, features, ids, weights, l2=1e-4):
+def loss_gradient(model, features, ids, weights, l2=1e-4, sample_weights=None):
     """compare predictions against all retained target weights"""
+    if sample_weights is not None:
+        sample_weights = np.asarray(sample_weights)
+        if (
+            sample_weights.shape != (len(ids),)
+            or not np.isfinite(sample_weights).all()
+            or (sample_weights < 0).any()
+            or (sample_weights > 1).any()
+        ):
+            raise ValueError("Expected one finite training weight within [0, 1] per target")
+        weights = weights * sample_weights[:, None]
     logs = log_probabilities(model, features)
     mass = weights.sum(axis=1)
     valid = ids != 255
@@ -157,8 +164,12 @@ def loss_gradient(model, features, ids, weights, l2=1e-4):
     return loss, gradient, residual.sum(axis=0)
 
 
-def train_batch(model, features, ids, weights, learning_rate=0.01, l2=1e-4):
-    loss, gradient, bias_gradient = loss_gradient(model, features, ids, weights, l2)
+def train_batch(
+    model, features, ids, weights, learning_rate=0.01, l2=1e-4, sample_weights=None
+):
+    loss, gradient, bias_gradient = loss_gradient(
+        model, features, ids, weights, l2, sample_weights
+    )
     step = model["metadata"]["step"]
     rate = learning_rate / np.sqrt(1 + step / 1000)
     model["weights"] -= rate * gradient
@@ -192,12 +203,15 @@ def load_model(path):
         model["metadata"] = json.loads(str(saved["metadata"]))
     metadata = model["metadata"]
     if (
-        metadata.get("version") != 1
+        metadata.get("version") != 2
+        or metadata.get("feature_definition") != "purchase-decay-v1"
+        or metadata.get("purchase_scales") != PURCHASE_SCALES.tolist()
+        or metadata.get("time_weight_floor") != TIME_WEIGHT_FLOOR
         or metadata.get("timescales") != TIMESCALES.tolist()
         or metadata.get("timestamp_unit") != "unix_ms"
         or list(metadata.get("taxonomy", {}).items()) != list(load_taxonomy().items())
     ):
-        raise ValueError("Model mapping or feature definition is incompatible")
+        raise ValueError("Model mapping or feature definition is incompatible; retrain with next_category.py --full")
     for name, shape in (("weights", (740, 148)), ("bias", (148,)), ("prior", (148,))):
         if model[name].shape != shape or not np.isfinite(model[name]).all():
             raise ValueError("Malformed model parameters")
@@ -306,7 +320,7 @@ def feature_batches(path, start, stop, lower, upper, batch_size=1024, diagnostic
         diagnostics = {}
     diagnostics.update(first_events=0, zero_mass_targets=0, examples=0)
     state, previous_user, previous_time = None, None, None
-    features, labels, targets = [], [], []
+    features, labels, targets, time_weights = [], [], [], []
     for batch in read_batches(
         path, start, stop, ["user_id", "timestamp", "top3_predictions"]
     ):
@@ -316,8 +330,15 @@ def feature_batches(path, start, stop, lower, upper, batch_size=1024, diagnostic
             raise ValueError("Invalid retained category mass")
         timestamps = batch["timestamp"].to_numpy(zero_copy_only=False)
         users = batch["user_id"].to_pylist()
-        for user, timestamp, categories, values, mass in zip(
-            users, timestamps, ids, weights, masses
+
+        # vectorize timing weights, first events never become targets
+        gaps = np.zeros(len(batch), dtype=np.float64)
+        gaps[1:] = timestamps[1:].astype(np.float64) - timestamps[:-1].astype(np.float64)
+        if previous_time is not None:
+            gaps[0] = int(timestamps[0]) - previous_time
+        batch_weights = training_weights(np.maximum(gaps, 0) / DAY_MS)
+        for user, timestamp, categories, values, mass, time_weight in zip(
+            users, timestamps, ids, weights, masses, batch_weights
         ):
             if not isinstance(user, str) or not isinstance(
                 timestamp, (int, np.integer)
@@ -342,24 +363,27 @@ def feature_batches(path, start, stop, lower, upper, batch_size=1024, diagnostic
             if not same_user:
                 state = new_state()
             elif lower <= timestamp < upper and mass > 0:
-                # predict before using the next purchase or its time gap
+                # features use past categories, timing only weights the target
                 features.append(history_features(state))
                 labels.append(categories)
                 targets.append(values)
-            update_state(state, timestamp, categories, values)
+                time_weights.append(time_weight)
+            update_state(state, categories, values)
             previous_user, previous_time = user, timestamp
             if len(features) == batch_size:
                 yield (
                     sparse.csr_matrix(np.asarray(features)),
                     np.asarray(labels),
                     np.asarray(targets),
+                    np.asarray(time_weights, dtype=np.float32),
                 )
-                features, labels, targets = [], [], []
+                features, labels, targets, time_weights = [], [], [], []
     if features:
         yield (
             sparse.csr_matrix(np.asarray(features)),
             np.asarray(labels),
             np.asarray(targets),
+            np.asarray(time_weights, dtype=np.float32),
         )
 
 
@@ -453,8 +477,8 @@ def choose_workers(path, rows, lower, upper, batch_size):
         with prepared_batches(
             path, min(rows, 500000), lower, upper, batch_size, workers
         ) as batches:
-            for features, ids, weights in batches:
-                train_batch(model, features, ids, weights)
+            for features, ids, weights, time_weights in batches:
+                train_batch(model, features, ids, weights, sample_weights=time_weights)
         timings[workers] = time.perf_counter() - start
         print(f"Benchmark: {workers} feature workers, {timings[workers]:.2f}s")
     best = min(timings, key=timings.get)
@@ -489,7 +513,8 @@ def evaluate(model, path, rows, lower, upper, batch_size=1024, workers=0):
     with prepared_batches(
         path, rows, lower, upper, batch_size, workers, diagnostics
     ) as batches:
-        for features, ids, weights in batches:
+        for features, ids, weights, time_weights in batches:
+            # evaluate every next purchase without timing weights
             logs = log_probabilities(model, features)
             for output, values in (
                 (totals, metric_totals(logs, ids, weights)),
@@ -603,14 +628,17 @@ def train(
             ) as batches,
             tqdm(desc=f"Epoch {epoch + 1}", unit=" examples") as progress,
         ):
-            for features, ids, weights in batches:
-                loss = train_batch(model, features, ids, weights, learning_rate, l2)
+            for features, ids, weights, time_weights in batches:
+                loss = train_batch(
+                    model, features, ids, weights, learning_rate, l2, time_weights
+                )
                 if not np.isfinite(loss):
                     raise ValueError(
                         "Nonfinite training objective; reduce learning rate"
                     )
                 valid = ids != 255
-                prior += np.bincount(ids[valid], weights=weights[valid], minlength=148)
+                weighted_targets = weights * time_weights[:, None]
+                prior += np.bincount(ids[valid], weights=weighted_targets[valid], minlength=148)
                 count += len(ids)
                 progress.update(len(ids))
         if not count:

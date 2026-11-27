@@ -28,7 +28,6 @@ Describe a temporal relationship of events using `timestamp` by transitioning to
 You will need ~15 GB of empty space to store preparation files of dataset.
 Final cleaned dataset is around ~7 GB.
 
-<br />
 
 ###
 * stage environment
@@ -37,7 +36,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 ```
-* data preparation(run through all steps to download and clean data)
+* data preparation
 ```sh
 python3 src/retail-therapy/dataset.py
 ```
@@ -72,6 +71,9 @@ SETUP DESCRIPTION HERE
         - *using `ParallelPoolExecutor`* and `polars` for large dataset
 
 💪 Training
+- [x] Add finer labels with assistance of second model
+    - *Instead of "Electronics" -> "Electronic Accessories"*
+    - *Instead of "All_Beauty" -> "Shampoo"*
 - [x] Train working (broad) predictor
     - [ ] Evaluate quality and test on larger random dataset
 
@@ -81,10 +83,7 @@ SETUP DESCRIPTION HERE
     - [ ] Multi-label dynamic prediction
 
 🤓 Stretch Goals
-- [x] Add finer labels with assistance of second model
-    - *Instead of "Electronics" -> "Keyboard"*
-    - *Instead of "All_Beauty" -> "Shampoo"*
-- [x] Time series analysis with ~~RBF kernel~~timescale exponential decay
+- [x] Time series analysis with ~~RBF kernel~~ timescale exponential decay
     - *Transition from naive-sequential to time-weighted predictions*
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

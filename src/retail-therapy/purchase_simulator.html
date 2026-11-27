@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Next purchase simulator</title>
+</head>
+<body>
+  <h1>Next purchase simulator</h1>
+  <form method="post" action="/">
+    <input type="hidden" name="history" value="$history">
+    <label for="category">Category</label>
+    <select id="category" name="category">
+$options
+    </select>
+    <button type="submit" name="action" value="add">Add</button>
+    <button type="submit" name="action" value="undo">Undo last</button>
+    <button type="submit" name="action" value="clear">Clear</button>
+  </form>
+  <p>$error</p>
+  <h2>Purchase history</h2>
+  <pre id="history" style="height: 8rem; overflow-y: scroll; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere;">$history_output</pre>
+  <h2>Top 5 next categories</h2>
+  <pre id="predictions">$predictions</pre>
+</body>
+</html>
