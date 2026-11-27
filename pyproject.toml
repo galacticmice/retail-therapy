@@ -14,5 +14,8 @@ dependencies = [
 
 [project.optional-dependencies]
 categorization = [
-    "sentence-transformers>=3.0,<6",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "scikit-learn>=1.6",
+    "threadpoolctl>=3.5",
 ]

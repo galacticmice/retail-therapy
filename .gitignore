@@ -22,5 +22,6 @@ data/
 GUI_backup_before_pull/
 
 # test
-README_categorization.md
+README-categorization.md
 README-prediction.md
+tests/
